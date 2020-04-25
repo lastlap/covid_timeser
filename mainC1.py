@@ -20,18 +20,25 @@ from modules import Encoder, Decoder
 from utils import numpy_to_tvar
 
 parser = argparse.ArgumentParser(description='Dual Stage Attention Model for Time Series prediction')
-parser.add_argument('--data', type=str, default='L1-train.csv',
+parser.add_argument('--data', type=str, default='Time.csv',
                     help='location/name of the datafile')
-parser.add_argument('--epochs', type=int, default=100,
+parser.add_argument('--epochs', type=int, default=5000,
                     help='number of epochs')
-parser.add_argument('--T', type=int, default=10,
+parser.add_argument('--T', type=int, default=5,
                     help='time steps')
 parser.add_argument('--batch_size', type=int, default=128,
                     help='batch_size')
-parser.add_argument('--lr', type=int, default=0.001,
+parser.add_argument('--lr', type=int, default=0.1,
                     help='learning rate')
+parser.add_argument('--min_lr', type=int, default=0.0001,
+                    help='learning rate')
+parser.add_argument('--clip', type=float, default=0.1,
+                    help='gradient clipping')
 parser.add_argument('--gpu', type=int, default=3, help='GPU device to use')
-
+parser.add_argument('--wdecay', type=float, default=1.2e-6,
+                    help='weight decay applied to all weights')
+parser.add_argument('--seed', type=int, default=12,
+                    help='random seed')
 args = parser.parse_args()
 
 # if torch.cuda.is_available():
@@ -52,6 +59,12 @@ fh = logging.FileHandler(os.path.join('results',save_name, 'log.txt'))
 fh.setFormatter(logging.Formatter(log_format))
 logging.getLogger().addHandler(fh)
 
+logging.info('Args: {}'.format(args))
+
+np.random.seed(args.seed)
+torch.manual_seed(args.seed)
+torch.cuda.manual_seed_all(args.seed)
+
 # logging.info(f"Using computation device: {device}")
 
 class TrainConfig:
@@ -61,14 +74,12 @@ class TrainConfig:
         self.batch_size = batch_size
         self.loss_func = loss_func
 
-
 class TrainData:
     def __init__(self, feats, targs):
         self.feats = feats
         self.targs = targs
 
-
-DaRnnNet = collections.namedtuple("DaRnnNet", ["encoder", "decoder", "enc_opt", "dec_opt"])
+DaRnnNet = collections.namedtuple("DaRnnNet", ["encoder", "decoder", "enc_opt", "dec_opt", "enc_sch", "dec_sch"])
 
 def preprocess_data(dat, col_names):
     scale = StandardScaler().fit(dat)
@@ -101,14 +112,19 @@ def da_rnn(train_data, n_targs: int, encoder_hidden_size=64, decoder_hidden_size
     decoder = Decoder(**dec_kwargs).cuda()
     with open(os.path.join("data", "dec_kwargs.json"), "w") as fi:
         json.dump(dec_kwargs, fi, indent=4)
-
+    
     encoder_optimizer = optim.Adam(
         params=[p for p in encoder.parameters() if p.requires_grad],
-        lr=learning_rate)
+        lr=learning_rate, weight_decay=args.wdecay)
+    
     decoder_optimizer = optim.Adam(
         params=[p for p in decoder.parameters() if p.requires_grad],
-        lr=learning_rate)
-    da_rnn_net = DaRnnNet(encoder, decoder, encoder_optimizer, decoder_optimizer)
+        lr=learning_rate, weight_decay=args.wdecay)
+    
+    encoder_scheduler = optim.lr_scheduler.CosineAnnealingLR(encoder_optimizer, args.epochs, eta_min = args.min_lr)
+    decoder_scheduler = optim.lr_scheduler.CosineAnnealingLR(decoder_optimizer, args.epochs, eta_min = args.min_lr)
+
+    da_rnn_net = DaRnnNet(encoder, decoder, encoder_optimizer, decoder_optimizer, encoder_scheduler, decoder_scheduler)
 
     return train_cfg, da_rnn_net
 
@@ -136,17 +152,30 @@ def train(net, train_data, t_cfg, n_epochs=10, save_plots=False):
             #    self.logger.info("Epoch %d, Batch %d: loss = %3.3f.", i, j / t_cfg.batch_size, loss)
             n_iter += 1
 
-            adjust_learning_rate(net, n_iter)
+            # adjust_learning_rate(net, n_iter)
 
         epoch_losses[e_i] = np.mean(iter_losses[range(e_i * iter_per_epoch, (e_i + 1) * iter_per_epoch)])
+        
+        # print("n_iter:",n_iter)
+        # if e_i % 200 ==0:
+        #     net = net._replace(enc_sch = optim.lr_scheduler.CosineAnnealingLR(net.enc_opt, args.epochs, eta_min = args.min_lr))
+        #     net = net._replace(dec_sch = optim.lr_scheduler.CosineAnnealingLR(net.dec_opt, args.epochs, eta_min = args.min_lr))       
 
-        if e_i % 1 == 0 or e_i == n_epochs - 1:
+        if e_i % 10 == 0 or e_i == n_epochs - 1:
             y_test_pred = predict(net, train_data,
                                   t_cfg.train_size, t_cfg.batch_size, t_cfg.T,
                                   on_train=False)
+            # print("y_test_pred:",y_test_pred.shape,type(y_test_pred))
+            # print("targs:",train_data.targs[t_cfg.train_size:].shape,type(train_data.targs[t_cfg.train_size:]))
+            mse = (t_cfg.loss_func(numpy_to_tvar(y_test_pred), numpy_to_tvar(train_data.targs[t_cfg.train_size:]))).cpu().data.numpy()
+            
+            # print("mse:",mse)
+            # print("y_test_pred:",y_test_pred.shape,type(y_test_pred))
+            # print("targs:",train_data.targs[t_cfg.train_size:].shape,type(train_data.targs[t_cfg.train_size:]))
+
             # TODO: make this MSE and make it work for multiple inputs
             val_loss = y_test_pred - train_data.targs[t_cfg.train_size:]
-            logging.info(f"Epoch {e_i:d}, train loss: {epoch_losses[e_i]:3.3f}, val loss: {np.mean(np.abs(val_loss))}.")
+            logging.info(f"Epoch {e_i:d}, train loss: {epoch_losses[e_i]:3.3f}, val loss: {np.mean(np.abs(val_loss))}, mse loss: {mse}")
             # y_train_pred = predict(net, train_data,
             #                        t_cfg.train_size, t_cfg.batch_size, t_cfg.T,
             #                        on_train=True)
@@ -199,11 +228,22 @@ def train_iteration(t_net, loss_func, X, y_history, y_target):
     y_pred = t_net.decoder(input_encoded, numpy_to_tvar(y_history))
 
     y_true = numpy_to_tvar(y_target)
+    # print("loss_func y_pred:",y_pred.shape,type(y_pred))
+    # print("loss_func y_true:",y_true.shape,type(y_true))
     loss = loss_func(y_pred, y_true)
     loss.backward()
+    
+    encoder_params = [p for p in model.encoder.parameters() if p.requires_grad]
+    decoder_params = [p for p in model.decoder.parameters() if p.requires_grad]
+
+    torch.nn.utils.clip_grad_norm_(encoder_params, args.clip)
+    torch.nn.utils.clip_grad_norm_(decoder_params, args.clip)
 
     t_net.enc_opt.step()
     t_net.dec_opt.step()
+
+    t_net.enc_sch.step()
+    t_net.dec_sch.step()
 
     return loss.item()
 
@@ -241,16 +281,19 @@ def predict(t_net, t_dat, train_size, batch_size, T, on_train=False):
 save_plots = True
 debug = False
 
-raw_data = pd.read_csv(os.path.join("data","gefcom2","Load-Task1", args.data))
+raw_data = pd.read_csv(os.path.join("data","covid", args.data))
 raw_data.dropna(how='any',inplace=True)
-del raw_data["ZONEID"]
-del raw_data["TIMESTAMP"]
+del raw_data["date"]
+del raw_data["time"]
+# del raw_data["negative"]
+# del raw_data["released"]
 logging.info(f"Shape of data: {raw_data.shape}.\nMissing in data: {raw_data.isnull().sum().sum()}.")
-targ_cols = ("LOAD",)
+targ_cols = ("deceased",)
 data, scaler = preprocess_data(raw_data, targ_cols)
 
 da_rnn_kwargs = {"batch_size": args.batch_size, "T": args.T}
 config, model = da_rnn(data, n_targs=len(targ_cols), learning_rate=args.lr, **da_rnn_kwargs)
+
 iter_loss, epoch_loss = train(model, data, config, n_epochs=args.epochs, save_plots=save_plots)
 final_y_pred = predict(model, data, config.train_size, config.batch_size, config.T)
 
@@ -268,9 +311,9 @@ final_y_pred = predict(model, data, config.train_size, config.batch_size, config
 # plt.legend(loc='upper left')
 # utils.save_or_show_plot("final_predicted.png", save_plots)
 
-with open(os.path.join("data", "da_rnn_kwargs.json"), "w") as fi:
+with open(os.path.join("save_name", "da_rnn_kwargs.json"), "w") as fi:
     json.dump(da_rnn_kwargs, fi, indent=4)
 
-joblib.dump(scaler, os.path.join("data", "scaler.pkl"))
-torch.save(model.encoder.state_dict(), os.path.join("data", "encoder.torch"))
-torch.save(model.decoder.state_dict(), os.path.join("data", "decoder.torch"))
+joblib.dump(scaler, os.path.join("save_name", "scaler.pkl"))
+torch.save(model.encoder.state_dict(), os.path.join("save_name", "encoder.torch"))
+torch.save(model.decoder.state_dict(), os.path.join("save_name", "decoder.torch"))

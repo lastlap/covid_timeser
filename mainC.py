@@ -48,7 +48,7 @@ utils.create_exp_dir(save_name, scripts_to_save=glob.glob('*.py'))
 log_format = '%(asctime)s %(message)s'
 logging.basicConfig(stream=sys.stdout, level=logging.INFO,
     format=log_format, datefmt='%m/%d %I:%M:%S %p')
-fh = logging.FileHandler(os.path.join(save_name, 'log.txt'))
+fh = logging.FileHandler(os.path.join('results',save_name, 'log.txt'))
 fh.setFormatter(logging.Formatter(log_format))
 logging.getLogger().addHandler(fh)
 
@@ -144,9 +144,17 @@ def train(net, train_data, t_cfg, n_epochs=10, save_plots=False):
             y_test_pred = predict(net, train_data,
                                   t_cfg.train_size, t_cfg.batch_size, t_cfg.T,
                                   on_train=False)
+            # print("y_test_pred:",y_test_pred.shape,type(y_test_pred))
+            # print("targs:",train_data.targs[t_cfg.train_size:].shape,type(train_data.targs[t_cfg.train_size:]))
+            mse = (t_cfg.loss_func(numpy_to_tvar(y_test_pred), numpy_to_tvar(train_data.targs[t_cfg.train_size:]))).cpu().data.numpy()
+            
+            # print("mse:",mse)
+            # print("y_test_pred:",y_test_pred.shape,type(y_test_pred))
+            # print("targs:",train_data.targs[t_cfg.train_size:].shape,type(train_data.targs[t_cfg.train_size:]))
+
             # TODO: make this MSE and make it work for multiple inputs
             val_loss = y_test_pred - train_data.targs[t_cfg.train_size:]
-            logging.info(f"Epoch {e_i:d}, train loss: {epoch_losses[e_i]:3.3f}, val loss: {np.mean(np.abs(val_loss))}.")
+            logging.info(f"Epoch {e_i:d}, train loss: {epoch_losses[e_i]:3.3f}, val loss: {np.mean(np.abs(val_loss))}, mse loss: {mse}")
             # y_train_pred = predict(net, train_data,
             #                        t_cfg.train_size, t_cfg.batch_size, t_cfg.T,
             #                        on_train=True)
@@ -199,6 +207,8 @@ def train_iteration(t_net, loss_func, X, y_history, y_target):
     y_pred = t_net.decoder(input_encoded, numpy_to_tvar(y_history))
 
     y_true = numpy_to_tvar(y_target)
+    # print("loss_func y_pred:",y_pred.shape,type(y_pred))
+    # print("loss_func y_true:",y_true.shape,type(y_true))
     loss = loss_func(y_pred, y_true)
     loss.backward()
 
@@ -248,7 +258,7 @@ del raw_data["time"]
 # del raw_data["negative"]
 # del raw_data["released"]
 logging.info(f"Shape of data: {raw_data.shape}.\nMissing in data: {raw_data.isnull().sum().sum()}.")
-targ_cols = ("deceased","released")
+targ_cols = ("deceased",)
 data, scaler = preprocess_data(raw_data, targ_cols)
 
 da_rnn_kwargs = {"batch_size": args.batch_size, "T": args.T}

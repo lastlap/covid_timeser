@@ -2,5 +2,5 @@
     "encoder_hidden_size": 64,
     "decoder_hidden_size": 64,
     "T": 5,
-    "out_feats": 2
+    "out_feats": 1
 }
