@@ -5,7 +5,7 @@ from torch.nn import functional as tf
 # device = torch.device("cuda:3" if torch.cuda.is_available() else "cpu")
 
 
-def init_hidden(x, hidden_size: int):
+def init_hidden(x, hidden_size):
     """
     Train the initial value of the hidden state:
     https://r2rt.com/non-zero-initial-states-for-recurrent-neural-networks.html
@@ -15,7 +15,7 @@ def init_hidden(x, hidden_size: int):
 
 class Encoder(nn.Module):
 
-    def __init__(self, input_size: int, hidden_size: int, T: int):
+    def __init__(self, input_size, hidden_size, T):
         """
         input size: number of underlying factors (81)
         T: number of time steps (10)
@@ -63,7 +63,7 @@ class Encoder(nn.Module):
 
 class Decoder(nn.Module):
 
-    def __init__(self, encoder_hidden_size: int, decoder_hidden_size: int, T: int, out_feats=1):
+    def __init__(self, encoder_hidden_size, decoder_hidden_size, T, out_feats=1):
         super(Decoder, self).__init__()
 
         self.T = T

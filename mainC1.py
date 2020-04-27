@@ -18,6 +18,8 @@ import numpy as np
 import utils
 from modules import Encoder, Decoder
 from utils import numpy_to_tvar
+from utils import RMSLELoss
+rmsleloss = RMSLELoss()
 
 parser = argparse.ArgumentParser(description='Dual Stage Attention Model for Time Series prediction')
 parser.add_argument('--data', type=str, default='Time.csv',
@@ -167,15 +169,15 @@ def train(net, train_data, t_cfg, n_epochs=10, save_plots=False):
                                   on_train=False)
             # print("y_test_pred:",y_test_pred.shape,type(y_test_pred))
             # print("targs:",train_data.targs[t_cfg.train_size:].shape,type(train_data.targs[t_cfg.train_size:]))
-            mse = (t_cfg.loss_func(numpy_to_tvar(y_test_pred), numpy_to_tvar(train_data.targs[t_cfg.train_size:]))).cpu().data.numpy()
-            
+            rmse = (torch.sqrt(t_cfg.loss_func(numpy_to_tvar(y_test_pred), numpy_to_tvar(train_data.targs[t_cfg.train_size:])))).cpu().data.numpy()
+            rmsle = (rmsleloss(numpy_to_tvar(y_test_pred), numpy_to_tvar(train_data.targs[t_cfg.train_size:]))).cpu().data.numpy()
             # print("mse:",mse)
             # print("y_test_pred:",y_test_pred.shape,type(y_test_pred))
             # print("targs:",train_data.targs[t_cfg.train_size:].shape,type(train_data.targs[t_cfg.train_size:]))
 
             # TODO: make this MSE and make it work for multiple inputs
             val_loss = y_test_pred - train_data.targs[t_cfg.train_size:]
-            logging.info(f"Epoch {e_i:d}, train loss: {epoch_losses[e_i]:3.3f}, val loss: {np.mean(np.abs(val_loss))}, mse loss: {mse}")
+            logging.info(f"Epoch {e_i:d}, train loss: {epoch_losses[e_i]:3.3f}, val loss: {np.mean(np.abs(val_loss))}, rmse loss: {rmse}, rmsle loss: {rmsle}")
             # y_train_pred = predict(net, train_data,
             #                        t_cfg.train_size, t_cfg.batch_size, t_cfg.T,
             #                        on_train=True)
